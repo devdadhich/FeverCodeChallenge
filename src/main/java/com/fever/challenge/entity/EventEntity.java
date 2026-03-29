@@ -17,7 +17,8 @@ import java.time.LocalDateTime;
     name = "events",
     uniqueConstraints = @UniqueConstraint(columnNames = {"base_plan_id", "plan_id"}),
     indexes = {
-        @Index(name = "idx_event_dates", columnList = "plan_start_date, plan_end_date")
+        @Index(name = "idx_event_dates", columnList = "plan_start_date, plan_end_date"),
+        @Index(name = "idx_event_natural_key", columnList = "base_plan_id, plan_id")
     }
 )
 public class EventEntity {

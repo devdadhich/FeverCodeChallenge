@@ -1,5 +1,10 @@
 server:
   port: 8080
+  tomcat:
+    threads:
+      max: 200             # Handle high concurrency (default is 200, explicit for clarity)
+      min-spare: 20        # Keep warm threads ready for traffic bursts
+    accept-count: 100      # Queue up to 100 connections when all threads are busy
 
 spring:
   datasource:
@@ -7,11 +12,21 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password:
+    hikari:
+      maximum-pool-size: 20        # Match expected concurrent DB readers
+      minimum-idle: 5              # Keep connections warm
+      connection-timeout: 5000     # Fail fast if pool is exhausted
   jpa:
     hibernate:
       ddl-auto: update
     show-sql: false
     open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 50           # Batch INSERT/UPDATE during sync
+        order_inserts: true        # Group inserts for batch efficiency
+        order_updates: true        # Group updates for batch efficiency
   h2:
     console:
       enabled: true
@@ -28,3 +43,13 @@ provider:
 logging:
   level:
     com.fever.challenge: INFO
+
+# Actuator endpoints
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,caches
+  endpoint:
+    health:
+      show-details: always         # Show DB and disk health details

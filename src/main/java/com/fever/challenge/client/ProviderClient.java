@@ -20,7 +20,7 @@ import java.util.Optional;
  * Includes retry logic to handle transient failures.
  */
 @Component
-public class ProviderClient {
+public class ProviderClient implements ProviderClientPort {
 
     private static final Logger log = LoggerFactory.getLogger(ProviderClient.class);
 

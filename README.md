@@ -208,10 +208,12 @@ src/main/java/com/fever/challenge/
 ├── FeverChallengeApplication.java      # Entry point, @EnableScheduling
 │
 ├── config/
-│   └── AppConfig.java                  # RestTemplate bean with timeouts
+│   ├── AppConfig.java                  # RestTemplate bean with timeouts
+│   └── CacheConfig.java               # Caffeine cache manager (500 entries, 60s TTL)
 │
 ├── client/
 │   ├── ProviderClient.java             # HTTP client: fetch + retry + XML parse
+│   ├── ProviderClientPort.java         # Interface for provider client (testability)
 │   └── ProviderXmlModels.java          # JAXB models for XML deserialization
 │
 ├── entity/
@@ -268,10 +270,12 @@ make test
 | Test Class                      | Tests | What it covers                                       |
 |---------------------------------|-------|------------------------------------------------------|
 | `EventSearchControllerTest`     | 7     | Endpoint: date range, no params, bad input, response shape |
+| `EventSyncServiceTest`          | 6     | Online filtering, price computation, upsert, preservation, provider failure |
 | `EventSearchServiceTest`        | 2     | UUID determinism, date/time field splitting           |
+| `ProviderClientTest`            | 7     | Retry logic, XML parsing, error handling, network failures |
 | `XmlParsingTest`                | 2     | JAXB deserialization of provider XML, price extraction|
 
-**Total: 11 tests, all passing.**
+**Total: 24 tests, all passing.**
 
 The controller tests use `@SpringBootTest` with `MockMvc` for full integration coverage. The test profile uses an in-memory H2 database (`jdbc:h2:mem:testdb`) and disables the sync scheduler to isolate test behavior.
 
@@ -282,10 +286,10 @@ The controller tests use `@SpringBootTest` with `MockMvc` for full integration c
 | Area | Current State | Production Enhancement |
 |---|---|---|
 | **Database** | H2 (embedded, file-based) | PostgreSQL or MySQL for concurrency, durability, and tooling |
-| **Caching** | None (DB queries are fast enough) | Caffeine or Redis for sub-ms responses under heavy load |
+| **Caching** | Caffeine (in-memory, 500 entries, 60s TTL) | Redis for distributed caching in multi-instance deployments |
 | **Sync strategy** | Full fetch every 30s | Incremental sync with ETags or If-Modified-Since headers |
 | **Multi-instance** | Single instance assumed | ShedLock or distributed lock to prevent duplicate sync jobs |
-| **Observability** | Application logs only | Micrometer metrics, health checks (`/actuator/health`), structured JSON logging |
+| **Observability** | Actuator health/metrics endpoints | Micrometer + Prometheus, structured JSON logging, alerting |
 | **Pagination** | Not implemented (spec doesn't define it) | Add `Pageable` support if dataset grows significantly |
 | **Rate limiting** | None | Add rate limiting to protect against abuse |
 | **API versioning** | Not needed yet | URL path versioning (`/v1/search`) when breaking changes arise |

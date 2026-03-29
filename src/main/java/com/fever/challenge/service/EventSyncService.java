@@ -1,6 +1,6 @@
 package com.fever.challenge.service;
 
-import com.fever.challenge.client.ProviderClient;
+import com.fever.challenge.client.ProviderClientPort;
 import com.fever.challenge.client.ProviderXmlModels.*;
 import com.fever.challenge.entity.EventEntity;
 import com.fever.challenge.repository.EventRepository;
@@ -13,15 +13,15 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeParseException;
-import java.util.List;
-import java.util.Optional;
+import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Periodically syncs events from the external provider into our database.
  *
  * Key design decisions:
  * - Only "online" sell_mode events are stored (as per requirements).
- * - Events are upserted: new ones are created, existing ones are updated.
+ * - Events are upserted in batches to minimize DB round-trips.
  * - Events are never deleted, so past events remain searchable.
  */
 @Service
@@ -30,12 +30,16 @@ public class EventSyncService {
     private static final Logger log = LoggerFactory.getLogger(EventSyncService.class);
     private static final String SELL_MODE_ONLINE = "online";
 
-    private final ProviderClient providerClient;
+    private final ProviderClientPort providerClient;
     private final EventRepository eventRepository;
+    private final EventSearchService eventSearchService;
 
-    public EventSyncService(ProviderClient providerClient, EventRepository eventRepository) {
+    public EventSyncService(ProviderClientPort providerClient,
+                            EventRepository eventRepository,
+                            EventSearchService eventSearchService) {
         this.providerClient = providerClient;
         this.eventRepository = eventRepository;
+        this.eventSearchService = eventSearchService;
     }
 
     /**
@@ -59,72 +63,105 @@ public class EventSyncService {
             return;
         }
 
+        // 1. Collect all online events from the XML into a flat list of pending upserts
+        List<PendingEvent> pendingEvents = collectOnlineEvents(planList);
+        if (pendingEvents.isEmpty()) {
+            log.info("Sync complete: no online events found");
+            return;
+        }
+
+        // 2. Bulk-load existing records by composite key to avoid N+1 queries
+        List<String> compositeKeys = pendingEvents.stream()
+                .map(PendingEvent::compositeKey)
+                .toList();
+
+        Map<String, EventEntity> existingByKey = eventRepository.findByCompositeKeys(compositeKeys)
+                .stream()
+                .collect(Collectors.toMap(
+                        e -> e.getBasePlanId() + ":" + e.getPlanId(),
+                        e -> e));
+
+        // 3. Merge: update existing entities, create new ones
+        List<EventEntity> toSave = new ArrayList<>();
         int created = 0;
         int updated = 0;
 
+        for (PendingEvent pending : pendingEvents) {
+            try {
+                EventEntity entity = existingByKey.get(pending.compositeKey());
+                boolean isNew = (entity == null);
+                if (isNew) {
+                    entity = new EventEntity();
+                    created++;
+                } else {
+                    updated++;
+                }
+
+                entity.setBasePlanId(pending.basePlanId);
+                entity.setPlanId(pending.planId);
+                entity.setTitle(pending.title);
+                entity.setPlanStartDate(parseDateTime(pending.startDate));
+                entity.setPlanEndDate(parseDateTime(pending.endDate));
+                entity.setMinPrice(pending.minPrice);
+                entity.setMaxPrice(pending.maxPrice);
+                entity.setUpdatedAt(LocalDateTime.now());
+
+                toSave.add(entity);
+            } catch (Exception e) {
+                log.error("Failed to process plan {} for base_plan {}: {}",
+                        pending.planId, pending.basePlanId, e.getMessage());
+            }
+        }
+
+        // 4. Batch save all entities
+        eventRepository.saveAll(toSave);
+
+        // 5. Invalidate search cache since data has changed
+        eventSearchService.evictCache();
+
+        log.info("Sync complete: {} created, {} updated (batch size: {})",
+                created, updated, toSave.size());
+    }
+
+    /**
+     * Collects all online events from the parsed XML into a flat list,
+     * computing min/max prices from zones during collection.
+     */
+    private List<PendingEvent> collectOnlineEvents(PlanList planList) {
+        List<PendingEvent> result = new ArrayList<>();
+
         for (BasePlan basePlan : planList.getOutput().getBasePlans()) {
             if (!SELL_MODE_ONLINE.equalsIgnoreCase(basePlan.getSellMode())) {
-                continue; // Skip non-online events
+                continue;
             }
-
             if (basePlan.getPlans() == null) {
                 continue;
             }
 
             for (Plan plan : basePlan.getPlans()) {
-                try {
-                    boolean isNew = upsertEvent(basePlan, plan);
-                    if (isNew) created++;
-                    else updated++;
-                } catch (Exception e) {
-                    log.error("Failed to process plan {} for base_plan {}: {}",
-                            plan.getPlanId(), basePlan.getBasePlanId(), e.getMessage());
+                BigDecimal minPrice = null;
+                BigDecimal maxPrice = null;
+
+                if (plan.getZones() != null) {
+                    for (Zone zone : plan.getZones()) {
+                        BigDecimal price = new BigDecimal(zone.getPrice());
+                        if (minPrice == null || price.compareTo(minPrice) < 0) minPrice = price;
+                        if (maxPrice == null || price.compareTo(maxPrice) > 0) maxPrice = price;
+                    }
                 }
+
+                result.add(new PendingEvent(
+                        basePlan.getBasePlanId(),
+                        plan.getPlanId(),
+                        basePlan.getTitle(),
+                        plan.getPlanStartDate(),
+                        plan.getPlanEndDate(),
+                        minPrice,
+                        maxPrice));
             }
         }
 
-        log.info("Sync complete: {} created, {} updated", created, updated);
-    }
-
-    /**
-     * Upserts a single event. Returns true if a new record was created.
-     */
-    private boolean upsertEvent(BasePlan basePlan, Plan plan) {
-        String basePlanId = basePlan.getBasePlanId();
-        String planId = plan.getPlanId();
-
-        Optional<EventEntity> existing = eventRepository.findByBasePlanIdAndPlanId(basePlanId, planId);
-
-        EventEntity entity = existing.orElseGet(EventEntity::new);
-        boolean isNew = existing.isEmpty();
-
-        entity.setBasePlanId(basePlanId);
-        entity.setPlanId(planId);
-        entity.setTitle(basePlan.getTitle());
-        entity.setPlanStartDate(parseDateTime(plan.getPlanStartDate()));
-        entity.setPlanEndDate(parseDateTime(plan.getPlanEndDate()));
-        entity.setUpdatedAt(LocalDateTime.now());
-
-        // Compute min/max prices from zones
-        if (plan.getZones() != null && !plan.getZones().isEmpty()) {
-            BigDecimal minPrice = null;
-            BigDecimal maxPrice = null;
-
-            for (Zone zone : plan.getZones()) {
-                BigDecimal price = new BigDecimal(zone.getPrice());
-                if (minPrice == null || price.compareTo(minPrice) < 0) {
-                    minPrice = price;
-                }
-                if (maxPrice == null || price.compareTo(maxPrice) > 0) {
-                    maxPrice = price;
-                }
-            }
-            entity.setMinPrice(minPrice);
-            entity.setMaxPrice(maxPrice);
-        }
-
-        eventRepository.save(entity);
-        return isNew;
+        return result;
     }
 
     private LocalDateTime parseDateTime(String dateTimeStr) {
@@ -136,6 +173,19 @@ public class EventSyncService {
         } catch (DateTimeParseException e) {
             log.warn("Could not parse date '{}': {}", dateTimeStr, e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * Internal record to hold parsed event data before persisting.
+     */
+    private record PendingEvent(
+            String basePlanId, String planId, String title,
+            String startDate, String endDate,
+            BigDecimal minPrice, BigDecimal maxPrice) {
+
+        String compositeKey() {
+            return basePlanId + ":" + planId;
         }
     }
 }
