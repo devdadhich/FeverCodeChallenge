@@ -1,0 +1,30 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/feverdb;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+  h2:
+    console:
+      enabled: true
+
+# Provider sync configuration
+provider:
+  url: https://provider.code-challenge.feverup.com/api/events
+  sync-interval-ms: 30000       # Sync every 30 seconds
+  connect-timeout-ms: 5000      # 5s connection timeout
+  read-timeout-ms: 10000        # 10s read timeout
+  max-retries: 3                # Retry up to 3 times on failure
+  retry-delay-ms: 2000          # 2s between retries
+
+logging:
+  level:
+    com.fever.challenge: INFO
