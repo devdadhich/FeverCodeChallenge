@@ -32,14 +32,11 @@ public class EventSyncService {
 
     private final ProviderClientPort providerClient;
     private final EventRepository eventRepository;
-    private final EventSearchService eventSearchService;
 
     public EventSyncService(ProviderClientPort providerClient,
-                            EventRepository eventRepository,
-                            EventSearchService eventSearchService) {
+                            EventRepository eventRepository) {
         this.providerClient = providerClient;
         this.eventRepository = eventRepository;
-        this.eventSearchService = eventSearchService;
     }
 
     /**
@@ -115,9 +112,6 @@ public class EventSyncService {
 
         // 4. Batch save all entities
         eventRepository.saveAll(toSave);
-
-        // 5. Invalidate search cache since data has changed
-        eventSearchService.evictCache();
 
         log.info("Sync complete: {} created, {} updated (batch size: {})",
                 created, updated, toSave.size());

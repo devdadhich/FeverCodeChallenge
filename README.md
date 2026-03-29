@@ -208,8 +208,7 @@ src/main/java/com/fever/challenge/
 ├── FeverChallengeApplication.java      # Entry point, @EnableScheduling
 │
 ├── config/
-│   ├── AppConfig.java                  # RestTemplate bean with timeouts
-│   └── CacheConfig.java               # Caffeine cache manager (500 entries, 60s TTL)
+│   └── AppConfig.java                  # RestTemplate bean with timeouts
 │
 ├── client/
 │   ├── ProviderClient.java             # HTTP client: fetch + retry + XML parse
@@ -286,7 +285,7 @@ The controller tests use `@SpringBootTest` with `MockMvc` for full integration c
 | Area | Current State | Production Enhancement |
 |---|---|---|
 | **Database** | H2 (embedded, file-based) | PostgreSQL or MySQL for concurrency, durability, and tooling |
-| **Caching** | Caffeine (in-memory, 500 entries, 60s TTL) | Redis for distributed caching in multi-instance deployments |
+| **Caching** | Not needed (embedded H2, sub-ms indexed queries) | Add Caffeine or Redis if DB becomes external or dataset grows large |
 | **Sync strategy** | Full fetch every 30s | Incremental sync with ETags or If-Modified-Since headers |
 | **Multi-instance** | Single instance assumed | ShedLock or distributed lock to prevent duplicate sync jobs |
 | **Observability** | Actuator health/metrics endpoints | Micrometer + Prometheus, structured JSON logging, alerting |

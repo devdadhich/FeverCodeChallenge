@@ -5,8 +5,6 @@ import com.fever.challenge.entity.EventEntity;
 import com.fever.challenge.repository.EventRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.cache.annotation.CacheEvict;
-import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -15,10 +13,13 @@ import java.util.UUID;
 
 /**
  * Service responsible for searching events from the local database.
- * Results are cached in-memory (Caffeine) to handle high request throughput
- * without hitting the DB on every call.
  *
- * Cache is evicted after each sync cycle so clients always see fresh data.
+ * Since H2 is an embedded in-process database and the dataset is small,
+ * indexed range queries are already sub-millisecond. No caching layer
+ * is needed -- it would add complexity without meaningful benefit.
+ *
+ * If the database were external (network hop) or the dataset large,
+ * a Caffeine or Redis cache would be justified.
  */
 @Service
 public class EventSearchService {
@@ -33,12 +34,8 @@ public class EventSearchService {
     }
 
     /**
-     * Searches events by date range. Results are cached by (startsAt, endsAt) key.
-     *
-     * Under 10k req/s with common date ranges, most requests will be served
-     * from cache without touching the database at all.
+     * Searches events by date range, directly from the database.
      */
-    @Cacheable(value = "events", key = "#startsAt.toString() + '_' + #endsAt.toString()")
     public List<EventSummaryDto> search(LocalDateTime startsAt, LocalDateTime endsAt) {
         List<EventEntity> events = eventRepository.findByDateRange(startsAt, endsAt);
 
@@ -50,15 +47,6 @@ public class EventSearchService {
         return events.stream()
                 .map(this::toDto)
                 .toList();
-    }
-
-    /**
-     * Evicts the entire search cache. Called by the sync service after
-     * new data has been persisted to ensure freshness.
-     */
-    @CacheEvict(value = "events", allEntries = true)
-    public void evictCache() {
-        log.debug("Search cache evicted");
     }
 
     private EventSummaryDto toDto(EventEntity entity) {
